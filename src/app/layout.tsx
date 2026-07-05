@@ -47,6 +47,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
         <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="google-site-verification" content="AYn5Cta8ihwOWUGxlb5E2keI48Fg2KPUgbaFE-4BS7c" />
       </head>
       <body className="bg-slate-50 text-slate-900 antialiased flex flex-col min-h-screen">
         <PWARegister />
