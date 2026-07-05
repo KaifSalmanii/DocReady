@@ -123,3 +123,22 @@ export function triggerConfetti() {
     });
   });
 }
+
+// --- SMART DOCUMENT PROCESSOR CODE ---
+
+export const DOC_SIZES = {
+  PAN: { width: 85.6, height: 53.98, name: "PAN Card" },
+  AADHAAR: { width: 85.6, height: 54.0, name: "Aadhaar Card" },
+  VOTER: { width: 85.6, height: 54.0, name: "Voter ID" },
+  DL: { width: 85.6, height: 53.98, name: "Driving License" },
+};
+
+export const loadImage = (url: string): Promise<HTMLImageElement> => {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image(); 
+    img.crossOrigin = "Anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = (err) => reject(err);
+    img.src = url;
+  });
+};
