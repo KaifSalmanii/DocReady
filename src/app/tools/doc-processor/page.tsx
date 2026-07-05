@@ -2,7 +2,8 @@
 
 import React, { useState, useRef } from "react";
 import { DOC_SIZES, loadImage } from "@/lib/utils";
-import removeBackground from "@imgly/background-removal";
+import { removeBackground } from "@imgly/background-removal";
+
 
 export default function DocProcessorPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
