@@ -1,18 +1,24 @@
 "use client";
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import {
   Upload, Zap, Download, RefreshCw, AlertCircle,
-  CheckCircle2, FileText, Image as ImageIcon, TrendingDown, X,
+  CheckCircle2, Check, FileText, Image as ImageIcon, TrendingDown, X, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import CameraScanButton from "@/components/CameraScanButton";
+import FileNameField from "@/components/FileNameField";
 import {
   cn, formatBytes, parseTargetSize,
   compressImageToTarget, downloadBlob, triggerConfetti,
 } from "@/lib/utils";
+import {
+  autoFileName, buildFileName, extensionOf, randomNameLike, stemOf,
+} from "@/lib/filename";
+import { takeStashedFiles } from "@/lib/pendingFiles";
 import toast from "react-hot-toast";
 import { PDFDocument } from "pdf-lib";
 
@@ -25,6 +31,8 @@ interface FileResult {
   iterations: number;
   status: "idle" | "processing" | "done" | "error";
   error?: string;
+  /** Random, space-free name this file will be downloaded with (renamable). */
+  outputName: string;
 }
 
 const PRESET_TARGETS = [
@@ -46,6 +54,7 @@ async function compressPDF(file: File, maxBytes: number): Promise<Blob> {
 
 export default function CompressorPage() {
   const [files, setFiles] = useState<FileResult[]>([]);
+  const [editingName, setEditingName] = useState<number | null>(null);
   const [targetInput, setTargetInput] = useState("50KB");
   const [customTarget, setCustomTarget] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -56,8 +65,9 @@ export default function CompressorPage() {
     return parseTargetSize(raw);
   };
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    const newFiles: FileResult[] = acceptedFiles.map((f) => ({
+  /** Adds files and gives every one of them a random, space-free output name. */
+  const addFiles = useCallback((incoming: File[]) => {
+    const newFiles: FileResult[] = incoming.map((f) => ({
       original: f,
       compressed: null,
       originalSize: f.size,
@@ -65,8 +75,39 @@ export default function CompressorPage() {
       quality: 0,
       iterations: 0,
       status: "idle",
+      outputName: randomNameLike(f, f.type.startsWith("image/") ? "compressed-photo" : "compressed-pdf"),
     }));
     setFiles((prev) => [...prev, ...newFiles]);
+  }, []);
+
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      if (acceptedFiles.length === 0) return;
+      addFiles(acceptedFiles);
+    },
+    [addFiles]
+  );
+
+  const onCameraScan = useCallback(
+    (scanned: File[]) => {
+      if (scanned.length === 0) return;
+      setActiveTab("image");
+      addFiles(scanned);
+    },
+    [addFiles]
+  );
+
+  // Photos scanned on another page land in the queue here too. The handoff buffer
+  // is emptied on read, so this can only ever apply once.
+  useEffect(() => {
+    const stashed = takeStashedFiles();
+    if (stashed.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot sync of the scan handoff on mount
+    addFiles(stashed);
+  }, [addFiles]);
+
+  const renameOutput = useCallback((idx: number, name: string) => {
+    setFiles((prev) => prev.map((f, i) => (i === idx ? { ...f, outputName: name } : f)));
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -158,10 +199,13 @@ export default function CompressorPage() {
 
   const downloadFile = (f: FileResult) => {
     if (!f.compressed) return;
-    const ext = f.original.type.startsWith("image/") ? "jpg" : "pdf";
-    const name = f.original.name.replace(/\.[^/.]+$/, "") + `-compressed.${ext}`;
-    downloadBlob(f.compressed, name);
-    toast.success("Downloaded! 🎉");
+    downloadBlob(f.compressed, f.outputName);
+    toast.success(`Downloaded as ${f.outputName} 🎉`);
+  };
+
+  const rerollName = (idx: number, name: string) => {
+    const ext = extensionOf(name) || "jpg";
+    renameOutput(idx, autoFileName(ext === "pdf" ? "compressed-pdf" : "compressed-photo", ext));
   };
 
   const downloadAll = () => {
@@ -170,6 +214,7 @@ export default function CompressorPage() {
 
   const clearAll = () => {
     setFiles([]);
+    setEditingName(null);
   };
 
   const targetBytes = getTargetBytes();
@@ -282,32 +327,51 @@ export default function CompressorPage() {
 
         {/* Upload Zone */}
         <div
-          {...getRootProps()}
           className={cn(
-            "border-2 border-dashed rounded-2xl p-8 cursor-pointer transition-all text-center",
-            isDragActive
-              ? "border-[#FF9933] bg-orange-50"
-              : "border-slate-300 bg-white hover:border-[#FF9933]/50 hover:bg-slate-50"
+            "border-2 border-dashed rounded-2xl bg-white overflow-hidden transition-colors",
+            isDragActive ? "border-[#FF9933] bg-orange-50" : "border-slate-300"
           )}
         >
-          <input {...getInputProps()} />
-          <div className="flex flex-col items-center gap-3">
-            <div className={cn(
-              "flex h-14 w-14 items-center justify-center rounded-xl transition-colors",
-              isDragActive ? "bg-[#FF9933]" : "bg-slate-100"
-            )}>
-              <Upload className={cn("h-7 w-7", isDragActive ? "text-white" : "text-slate-400")} />
-            </div>
-            <div>
-              <p className="font-bold text-[#0A2540]">
-                {isDragActive ? "Release to add files!" : `Drop ${activeTab === "image" ? "images" : "PDFs"} here`}
-              </p>
-              <p className="text-sm text-slate-500 mt-1">
-                {activeTab === "image" ? "JPG, PNG, WebP" : "PDF files"} •
-                <span className="text-[#FF9933]"> Click to browse</span>
-              </p>
+          <div
+            {...getRootProps()}
+            className="p-8 cursor-pointer transition-all text-center hover:bg-slate-50"
+          >
+            <input {...getInputProps()} />
+            <div className="flex flex-col items-center gap-3">
+              <div className={cn(
+                "flex h-14 w-14 items-center justify-center rounded-xl transition-colors",
+                isDragActive ? "bg-[#FF9933]" : "bg-slate-100"
+              )}>
+                <Upload className={cn("h-7 w-7", isDragActive ? "text-white" : "text-slate-400")} />
+              </div>
+              <div>
+                <p className="font-bold text-[#0A2540]">
+                  {isDragActive ? "Release to add files!" : `Drop ${activeTab === "image" ? "images" : "PDFs" } here`}
+                </p>
+                <p className="text-sm text-slate-500 mt-1">
+                  {activeTab === "image" ? "JPG, PNG, WebP" : "PDF files"} •
+                  <span className="text-[#FF9933]"> Click to browse</span>
+                </p>
+              </div>
             </div>
           </div>
+
+          {activeTab === "image" && (
+            <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <CameraScanButton
+                onFiles={onCameraScan}
+                multiple
+                fileNamePrefix="photo-scan"
+                title="Scan Photos with Camera"
+                subtitle="कैमरे से फोटो खींचें और सीधे कम्प्रेस करें"
+                label="Scan with Camera"
+                size="sm"
+              />
+              <p className="text-[11px] text-slate-400 text-center sm:text-left">
+                हर स्कैन का नाम अपने आप random बनेगा (date + time + code, बिना space) — चाहें तो rename कर लें।
+              </p>
+            </div>
+          )}
         </div>
 
         {/* File List */}
@@ -353,6 +417,43 @@ export default function CompressorPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-[#0A2540] text-sm truncate">{f.original.name}</p>
+
+                        {/* Random, renamable output name */}
+                        <div className="mt-1.5">
+                          {editingName === idx ? (
+                            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                              <FileNameField
+                                size="sm"
+                                label="Save as / नाम बदलें"
+                                value={stemOf(f.outputName)}
+                                extension={extensionOf(f.outputName) || "jpg"}
+                                onChange={(stem) =>
+                                  renameOutput(idx, buildFileName(stem, extensionOf(f.outputName) || "jpg"))
+                                }
+                                onRandomize={() => rerollName(idx, f.outputName)}
+                                hint="Random by default — spaces are not allowed."
+                              />
+                              <div className="flex justify-end mt-1.5">
+                                <Button size="sm" variant="secondary" onClick={() => setEditingName(null)}>
+                                  <Check className="h-3.5 w-3.5" /> Done
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setEditingName(idx)}
+                              className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-[#0A2540] group max-w-full"
+                              title="Rename this output file"
+                            >
+                              <span className="text-slate-400">Saves as</span>
+                              <code className="font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 truncate group-hover:border-[#FF9933]">
+                                {f.outputName}
+                              </code>
+                              <Pencil className="h-3 w-3 text-[#FF9933] shrink-0" />
+                            </button>
+                          )}
+                        </div>
+
                         <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
                           <span>Original: <strong>{formatBytes(f.originalSize)}</strong></span>
                           {f.status === "done" && (

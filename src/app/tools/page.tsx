@@ -1,14 +1,18 @@
 "use client";
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import {
   Upload, Image as ImageIcon, FileText, CheckCircle2,
-  AlertCircle, XCircle, Download, RefreshCw, Plus, GripVertical, X,
+  AlertCircle, XCircle, Download, RefreshCw, Plus, GripVertical, X, Camera,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import CameraScanButton from "@/components/CameraScanButton";
+import FileNameField from "@/components/FileNameField";
 import { cn, formatBytes, downloadBlob, triggerConfetti } from "@/lib/utils";
+import { useFileName } from "@/lib/use-file-name";
+import { takeStashedFiles } from "@/lib/pendingFiles";
 import toast from "react-hot-toast";
 import { PDFDocument } from "pdf-lib";
 
@@ -96,19 +100,41 @@ export default function ToolsPage() {
   // --- Image to PDF state ---
   const [images, setImages] = useState<ImageFile[]>([]);
   const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
+  const pdfName = useFileName("docready-pdf", "pdf");
 
-  const onDropImages = useCallback((acceptedFiles: File[]) => {
-    const newImgs = acceptedFiles.map((f) => ({
+  const addImages = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles.length === 0) return;
+    const newImgs: ImageFile[] = acceptedFiles.map((f) => ({
       file: f,
       url: URL.createObjectURL(f),
       id: Math.random().toString(36).slice(2),
     }));
     setImages((prev) => [...prev, ...newImgs]);
+    setPdfBlob(null); // any previous output is now stale
   }, []);
+
+  const onCameraScanImages = useCallback(
+    (scanned: File[]) => {
+      if (scanned.length === 0) return;
+      addImages(scanned);
+      toast.success(`${scanned.length} scan(s) added to the PDF queue`);
+    },
+    [addImages]
+  );
+
+  // Images scanned elsewhere (home page) can be handed over to this tool.
+  // The handoff buffer is emptied on read, so this applies at most once.
+  useEffect(() => {
+    const stashed = takeStashedFiles().filter((f) => f.type.startsWith("image/"));
+    if (stashed.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot sync of the scan handoff on mount
+    addImages(stashed);
+  }, [addImages]);
 
   const { getRootProps: getImgRootProps, getInputProps: getImgInputProps, isDragActive: isImgDragActive } =
     useDropzone({
-      onDrop: onDropImages,
+      onDrop: addImages,
       accept: { "image/jpeg": [], "image/png": [], "image/webp": [] },
       maxFiles: 20,
     });
@@ -119,6 +145,7 @@ export default function ToolsPage() {
       if (removed) URL.revokeObjectURL(removed.url);
       return prev.filter((i) => i.id !== id);
     });
+    setPdfBlob(null);
   };
 
   const moveImage = (from: number, to: number) => {
@@ -165,14 +192,22 @@ export default function ToolsPage() {
 
       const pdfBytes = await pdfDoc.save();
       const blob = new Blob([pdfBytes.buffer as ArrayBuffer], { type: "application/pdf" });
-      downloadBlob(blob, "docready-images.pdf");
-      triggerConfetti();
-      toast.success(`${images.length} image(s) merged into PDF! 🎉`);
+      setPdfBlob(blob);
+      // Fresh random, space-free name every time a PDF is produced.
+      pdfName.randomize();
+      toast.success(`${images.length} image(s) merged into PDF — name it, then download!`);
     } catch {
       toast.error("Failed to generate PDF. Please try again.");
     } finally {
       setPdfGenerating(false);
     }
+  };
+
+  const handleDownloadPDF = () => {
+    if (!pdfBlob) return;
+    downloadBlob(pdfBlob, pdfName.fileName);
+    triggerConfetti();
+    toast.success(`Downloaded as ${pdfName.fileName} 🎉`);
   };
 
   // --- Validator state ---
@@ -337,22 +372,40 @@ export default function ToolsPage() {
                 <span className="block mt-0.5 text-xs">कई इमेज को A4 PDF में मर्ज करें।</span>
               </p>
 
-              {/* Drop zone */}
+              {/* Drop zone + camera scan */}
               <div
-                {...getImgRootProps()}
                 className={cn(
-                  "border-2 border-dashed rounded-xl p-8 cursor-pointer text-center transition-all",
-                  isImgDragActive
-                    ? "border-[#FF9933] bg-orange-50"
-                    : "border-slate-300 hover:border-[#FF9933]/50"
+                  "border-2 border-dashed rounded-xl bg-white overflow-hidden transition-colors",
+                  isImgDragActive ? "border-[#FF9933] bg-orange-50" : "border-slate-300"
                 )}
               >
-                <input {...getImgInputProps()} />
-                <Plus className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-                <p className="text-sm font-semibold text-slate-500">
-                  {isImgDragActive ? "Drop images!" : "Add Images (JPG, PNG)"}
-                </p>
-                <p className="text-xs text-slate-400 mt-1">Supports up to 20 images</p>
+                <div
+                  {...getImgRootProps()}
+                  className="p-8 cursor-pointer text-center transition-all hover:bg-slate-50"
+                >
+                  <input {...getImgInputProps()} />
+                  <Plus className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-slate-500">
+                    {isImgDragActive ? "Drop images!" : "Add Images (JPG, PNG)"}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">Supports up to 20 images</p>
+                </div>
+                <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <CameraScanButton
+                    onFiles={onCameraScanImages}
+                    multiple
+                    maxShots={20}
+                    fileNamePrefix="doc-scan"
+                    title="Scan Documents with Camera"
+                    subtitle="हर पेज कैमरे से स्कैन करें — A4 PDF में जुड़ जाएगा"
+                    label="Scan Pages with Camera"
+                    size="sm"
+                  />
+                  <p className="text-[11px] text-slate-400 text-center sm:text-left max-w-sm">
+                    <Camera className="h-3 w-3 inline mr-1 text-[#FF9933]" />
+                    Capture page by page, review the strip, then add them all in one go.
+                  </p>
+                </div>
               </div>
 
               {/* Image list */}
@@ -363,7 +416,7 @@ export default function ToolsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setImages([])}
+                      onClick={() => { setImages([]); setPdfBlob(null); }}
                       className="text-red-500"
                     >
                       <X className="h-4 w-4" /> Clear
@@ -422,9 +475,42 @@ export default function ToolsPage() {
                 {pdfGenerating ? (
                   <><RefreshCw className="h-4 w-4 animate-spin" /> Generating PDF...</>
                 ) : (
-                  <><FileText className="h-4 w-4" /> Generate A4 PDF ({images.length} pages)</>
+                  <>
+                    <FileText className="h-4 w-4" />
+                    {pdfBlob ? "Re-generate A4 PDF" : `Generate A4 PDF (${images.length} pages)`}
+                  </>
                 )}
               </Button>
+            )}
+
+            {/* Output: random name, renamable before download */}
+            {pdfBlob && !pdfGenerating && (
+              <div className="bg-white rounded-2xl border border-green-200 p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  <div>
+                    <h3 className="font-bold text-[#0A2540] text-sm">PDF ready / PDF तैयार है</h3>
+                    <p className="text-xs text-slate-400">
+                      {images.length} page(s) • {formatBytes(pdfBlob.size)}
+                    </p>
+                  </div>
+                </div>
+                <FileNameField
+                  value={pdfName.stem}
+                  extension="pdf"
+                  onChange={pdfName.setName}
+                  onRandomize={pdfName.randomize}
+                  label="PDF file name / फ़ाइल का नाम"
+                  hint="Auto-named with date + time + random code — no spaces allowed."
+                />
+                <Button onClick={handleDownloadPDF} variant="saffron" size="lg" className="w-full mt-4">
+                  <Download className="h-4 w-4" />
+                  Download PDF
+                </Button>
+                <p className="text-[11px] text-slate-400 text-center mt-2">
+                  Saves as <code className="text-slate-500 break-all">{pdfName.fileName}</code>
+                </p>
+              </div>
             )}
 
             <div className="bg-[#0A2540]/5 rounded-2xl p-4">
@@ -507,6 +593,22 @@ export default function ToolsPage() {
                     <p className="text-xs text-slate-400">JPG, PNG, PDF</p>
                   </div>
                 )}
+              </div>
+
+              {/* Scan the document with the camera instead of uploading */}
+              <div className="mt-3 flex flex-col sm:flex-row items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                <CameraScanButton
+                  onFiles={(files) => onDropValidator(files.slice(0, 1))}
+                  fileNamePrefix="validate-scan"
+                  title="Scan File for Validation"
+                  subtitle="कैमरे से स्कैन करके जाँचें कि फ़ाइल सही फॉर्मेट में है"
+                  label="Scan with Camera"
+                  variant="outline"
+                  size="sm"
+                />
+                <p className="text-[11px] text-slate-400 text-center sm:text-left">
+                  Prefer the built-in camera app? Use “Use device camera” inside the scanner.
+                </p>
               </div>
 
               {validatorFile && (

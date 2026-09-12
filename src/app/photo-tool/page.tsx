@@ -1,16 +1,21 @@
 "use client";
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import Cropper from "react-easy-crop";
 import type { Area, Point } from "react-easy-crop";
 import { useDropzone } from "react-dropzone";
 import {
   Upload, ZoomIn, ZoomOut, RotateCcw, RotateCw,
-  Download, RefreshCw, CheckCircle2, ChevronDown, Info,
+  Download, RefreshCw, CheckCircle2, ChevronDown, Info, Camera,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import CameraScanButton from "@/components/CameraScanButton";
+import FileNameField from "@/components/FileNameField";
 import { cn, downloadBlob, triggerConfetti, formatBytes } from "@/lib/utils";
+import { randomFileStem, slugPrefix } from "@/lib/filename";
+import { useFileName } from "@/lib/use-file-name";
+import { takeStashedFiles } from "@/lib/pendingFiles";
 import toast from "react-hot-toast";
 
 const PRESETS = [
@@ -140,14 +145,15 @@ export default function PhotoToolPage() {
   const [croppedBlob, setCroppedBlob] = useState<Blob | null>(null);
   const [processing, setProcessing] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
+  // Where the picture came from + the rename-able output name
+  const [source, setSource] = useState<{ name: string; fromCamera: boolean } | null>(null);
+  const outName = useFileName("docready-photo", "jpg");
 
   const onCropComplete = useCallback((_: Area, croppedAreaPixels: Area) => {
     setCroppedAreaPixels(croppedAreaPixels);
   }, []);
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    if (!file) return;
+  const loadFile = useCallback((file: File, fromCamera = false) => {
     const reader = new FileReader();
     reader.onload = () => {
       setImageSrc(reader.result as string);
@@ -156,8 +162,36 @@ export default function PhotoToolPage() {
       setZoom(1);
       setRotation(0);
       setCrop({ x: 0, y: 0 });
+      setSource({ name: file.name, fromCamera });
+      outName.randomize();
     };
     reader.readAsDataURL(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      const file = acceptedFiles[0];
+      if (!file) return;
+      loadFile(file);
+    },
+    [loadFile]
+  );
+
+  const onCameraScan = useCallback(
+    (files: File[]) => {
+      const file = files[0];
+      if (!file) return;
+      loadFile(file, true);
+    },
+    [loadFile]
+  );
+
+  // A photo scanned on another page (e.g. the home drop zone) arrives here.
+  useEffect(() => {
+    const stashed = takeStashedFiles().filter((f) => f.type.startsWith("image/"));
+    if (stashed.length > 0) loadFile(stashed[0], true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -180,6 +214,8 @@ export default function PhotoToolPage() {
       const url = URL.createObjectURL(blob);
       setCroppedImage(url);
       setCroppedBlob(blob);
+      // Every output file gets a fresh random name: date+time+random, no spaces.
+      outName.setName(randomFileStem(slugPrefix(selectedPreset.label)));
       toast.success("Photo cropped successfully!");
     } catch {
       toast.error("Cropping failed. Please try again.");
@@ -190,15 +226,16 @@ export default function PhotoToolPage() {
 
   const handleDownload = () => {
     if (!croppedBlob) return;
-    downloadBlob(croppedBlob, `docready-${selectedPreset.label.replace(/\s+/g, "-").toLowerCase()}.jpg`);
+    downloadBlob(croppedBlob, outName.fileName);
     triggerConfetti();
-    toast.success("Downloaded successfully! 🎉");
+    toast.success(`Downloaded as ${outName.fileName} 🎉`);
   };
 
   const handleReset = () => {
     setImageSrc(null);
     setCroppedImage(null);
     setCroppedBlob(null);
+    setSource(null);
     setZoom(1);
     setRotation(0);
     setCrop({ x: 0, y: 0 });
@@ -224,33 +261,50 @@ export default function PhotoToolPage() {
 
       <div className="mx-auto max-w-5xl px-4 sm:px-6 py-8">
         {!imageSrc ? (
-          /* Upload Zone */
+          /* Upload Zone — browse, drag & drop, or scan with the camera */
           <div
-            {...getRootProps()}
             className={cn(
-              "border-2 border-dashed rounded-2xl p-12 sm:p-16 cursor-pointer transition-all text-center",
-              isDragActive
-                ? "border-[#FF9933] bg-orange-50"
-                : "border-slate-300 bg-white hover:border-[#FF9933]/50 hover:bg-slate-50"
+              "border-2 border-dashed rounded-2xl bg-white overflow-hidden transition-colors",
+              isDragActive ? "border-[#FF9933] bg-orange-50" : "border-slate-300"
             )}
           >
-            <input {...getInputProps()} />
-            <div className="flex flex-col items-center gap-4">
-              <div className={cn(
-                "flex h-20 w-20 items-center justify-center rounded-2xl transition-colors",
-                isDragActive ? "bg-[#FF9933]" : "bg-slate-100"
-              )}>
-                <Upload className={cn("h-10 w-10", isDragActive ? "text-white" : "text-slate-400")} />
+            <div
+              {...getRootProps()}
+              className="p-12 sm:p-16 cursor-pointer transition-all text-center hover:bg-slate-50"
+            >
+              <input {...getInputProps()} />
+              <div className="flex flex-col items-center gap-4">
+                <div className={cn(
+                  "flex h-20 w-20 items-center justify-center rounded-2xl transition-colors",
+                  isDragActive ? "bg-[#FF9933]" : "bg-slate-100"
+                )}>
+                  <Upload className={cn("h-10 w-10", isDragActive ? "text-white" : "text-slate-400")} />
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-[#0A2540] mb-1">
+                    {isDragActive ? "Drop your photo here!" : "Upload Photo"}
+                  </p>
+                  <p className="text-slate-500 text-sm">
+                    अपनी फोटो यहाँ खींचें या <span className="text-[#FF9933] underline">चुनें</span>
+                  </p>
+                  <p className="text-slate-400 text-xs mt-2">JPG, PNG, WebP supported</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xl font-bold text-[#0A2540] mb-1">
-                  {isDragActive ? "Drop your photo here!" : "Upload Photo"}
-                </p>
-                <p className="text-slate-500 text-sm">
-                  अपनी फोटो यहाँ खींचें या <span className="text-[#FF9933] underline">चुनें</span>
-                </p>
-                <p className="text-slate-400 text-xs mt-2">JPG, PNG, WebP supported</p>
-              </div>
+            </div>
+
+            {/* Camera scan */}
+            <div className="border-t border-slate-200 bg-slate-50 px-4 py-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <CameraScanButton
+                onFiles={onCameraScan}
+                fileNamePrefix="passport-scan"
+                title="Scan Photo with Camera"
+                subtitle="कैमरे से फोटो खींचें — सीधे क्रॉपर में खुल जाएगी"
+              />
+              <p className="text-xs text-slate-400 text-center sm:text-left max-w-xs">
+                <Camera className="h-3.5 w-3.5 inline mr-1 text-[#FF9933]" />
+                Click the button, line your face inside the frame and capture — the scan is
+                named randomly with no spaces.
+              </p>
             </div>
           </div>
         ) : (
@@ -373,7 +427,15 @@ export default function PhotoToolPage() {
                   <span className="text-sm font-bold text-[#0A2540]">
                     {selectedPreset.label} — {selectedPreset.info}
                   </span>
-                  <Badge variant="secondary" className="text-xs">Fixed Box</Badge>
+                  <div className="flex items-center gap-2">
+                    {source && (
+                      <Badge variant={source.fromCamera ? "saffron" : "secondary"} className="text-xs max-w-[190px] truncate">
+                        {source.fromCamera ? "📸 " : "📁 "}
+                        {source.name}
+                      </Badge>
+                    )}
+                    <Badge variant="secondary" className="text-xs">Fixed Box</Badge>
+                  </div>
                 </div>
                 {/* Cropper Container */}
                 <div className="relative w-full" style={{ height: "420px" }}>
@@ -441,6 +503,16 @@ export default function PhotoToolPage() {
                           <p className="font-bold text-[#0A2540]">JPEG / 95%</p>
                         </div>
                       </div>
+                      <div className="bg-white border border-slate-200 rounded-xl p-3">
+                        <FileNameField
+                          value={outName.stem}
+                          extension="jpg"
+                          onChange={outName.setName}
+                          onRandomize={outName.randomize}
+                          size="sm"
+                          hint="Random name from date + time + code — spaces are not allowed."
+                        />
+                      </div>
                       <Button
                         onClick={handleDownload}
                         variant="saffron"
@@ -449,6 +521,9 @@ export default function PhotoToolPage() {
                         <Download className="h-4 w-4" />
                         Download Photo
                       </Button>
+                      <p className="text-[11px] text-slate-400 text-center">
+                        Saves as <code className="text-slate-500">{outName.fileName}</code>
+                      </p>
                     </div>
                   </div>
                 </div>
