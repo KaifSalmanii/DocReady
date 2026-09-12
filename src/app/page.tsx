@@ -20,10 +20,13 @@ import {
   Globe,
   Clock,
   Award,
+  Camera,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import CameraScanButton from "@/components/CameraScanButton";
 import { cn } from "@/lib/utils";
+import { stashFiles } from "@/lib/pendingFiles";
 import toast from "react-hot-toast";
 
 const tools = [
@@ -114,6 +117,20 @@ const testimonials = [
 
 export default function HomePage() {
   const router = useRouter();
+
+  /**
+   * Camera scans taken straight from the home page: the photo is handed over
+   * to the matching tool in memory (never uploaded), then we route there.
+   */
+  const onCameraScan = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      stashFiles(files);
+      toast.success(`Scanned as ${files[0].name} — opening the photo tool`);
+      router.push("/photo-tool");
+    },
+    [router]
+  );
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
@@ -208,58 +225,80 @@ export default function HomePage() {
               </Link>
             </div>
 
-            {/* Drop Zone */}
+            {/* Drop Zone + Camera Scan */}
             <div
-              {...getRootProps()}
               className={cn(
-                "w-full max-w-2xl border-2 border-dashed rounded-3xl p-8 sm:p-12 cursor-pointer transition-all duration-300 group",
+                "w-full max-w-2xl border-2 border-dashed rounded-3xl overflow-hidden transition-all duration-300 group",
                 isDragActive
                   ? "border-[#FF9933] bg-[#FF9933]/10 scale-[1.02]"
-                  : "border-white/15 bg-white/[0.04] hover:border-[#FF9933]/40 hover:bg-white/[0.06]"
+                  : "border-white/15 bg-white/[0.04] hover:border-[#FF9933]/40"
               )}
             >
-              <input {...getInputProps()} />
-              <div className="flex flex-col items-center gap-5">
-                <div
-                  className={cn(
-                    "flex h-20 w-20 items-center justify-center rounded-2xl transition-all duration-300",
-                    isDragActive
-                      ? "bg-[#FF9933] scale-110"
-                      : "bg-white/10 group-hover:bg-[#FF9933]/20 group-hover:scale-105"
-                  )}
-                >
-                  <Upload
+              <div
+                {...getRootProps()}
+                className="p-8 sm:p-12 cursor-pointer transition-all duration-300 group-hover:bg-white/[0.06]"
+              >
+                <input {...getInputProps()} />
+                <div className="flex flex-col items-center gap-5">
+                  <div
                     className={cn(
-                      "h-10 w-10 transition-colors",
-                      isDragActive ? "text-white" : "text-slate-400 group-hover:text-[#FF9933]"
+                      "flex h-20 w-20 items-center justify-center rounded-2xl transition-all duration-300",
+                      isDragActive
+                        ? "bg-[#FF9933] scale-110"
+                        : "bg-white/10 group-hover:bg-[#FF9933]/20 group-hover:scale-105"
                     )}
-                  />
+                  >
+                    <Upload
+                      className={cn(
+                        "h-10 w-10 transition-colors",
+                        isDragActive ? "text-white" : "text-slate-400 group-hover:text-[#FF9933]"
+                      )}
+                    />
+                  </div>
+                  <div>
+                    <p className="text-xl font-bold text-white mb-1">
+                      {isDragActive ? "🎯 Release to process!" : "Drag & Drop your file here"}
+                    </p>
+                    <p className="text-slate-400 text-sm">
+                      Or{" "}
+                      <span className="text-[#FF9933] underline underline-offset-2">
+                        click to browse
+                      </span>{" "}
+                      • Auto-routes to the right tool
+                    </p>
+                    <p className="text-slate-600 text-xs mt-1">
+                      यहाँ फाइल खींचें – टूल अपने आप चुना जाएगा
+                    </p>
+                  </div>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    {["PDF", "JPG", "PNG", "WebP"].map((fmt) => (
+                      <span
+                        key={fmt}
+                        className="px-3 py-1 bg-white/8 border border-white/10 rounded-full text-xs text-slate-400 font-mono tracking-wider"
+                      >
+                        .{fmt.toLowerCase()}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xl font-bold text-white mb-1">
-                    {isDragActive ? "🎯 Release to process!" : "Drag & Drop your file here"}
-                  </p>
-                  <p className="text-slate-400 text-sm">
-                    Or{" "}
-                    <span className="text-[#FF9933] underline underline-offset-2">
-                      click to browse
-                    </span>{" "}
-                    • Auto-routes to the right tool
-                  </p>
-                  <p className="text-slate-600 text-xs mt-1">
-                    यहाँ फाइल खींचें – टूल अपने आप चुना जाएगा
-                  </p>
-                </div>
-                <div className="flex gap-2 flex-wrap justify-center">
-                  {["PDF", "JPG", "PNG", "WebP"].map((fmt) => (
-                    <span
-                      key={fmt}
-                      className="px-3 py-1 bg-white/8 border border-white/10 rounded-full text-xs text-slate-400 font-mono tracking-wider"
-                    >
-                      .{fmt.toLowerCase()}
-                    </span>
-                  ))}
-                </div>
+              </div>
+
+              {/* Scan straight from the camera instead of uploading a file */}
+              <div className="border-t border-white/10 bg-white/[0.04] px-4 py-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+                <CameraScanButton
+                  onFiles={onCameraScan}
+                  fileNamePrefix="photo-scan"
+                  title="Scan with Camera"
+                  subtitle="फोटो या दस्तावेज़ कैमरे से स्कैन करें"
+                  label="Scan with Camera"
+                  labelHi="कैमरे से स्कैन करें"
+                  size="sm"
+                />
+                <p className="text-[11px] text-slate-500 text-center sm:text-left max-w-xs">
+                  <Camera className="h-3 w-3 inline mr-1 text-[#FF9933]" />
+                  Live camera on mobile &amp; desktop. Saved files get a random, space-free name
+                  and can be renamed in the tool.
+                </p>
               </div>
             </div>
           </div>

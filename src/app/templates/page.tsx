@@ -6,7 +6,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import FileNameField from "@/components/FileNameField";
 import { cn, downloadBlob, triggerConfetti } from "@/lib/utils";
+import { randomFileStem, slugPrefix } from "@/lib/filename";
+import { useFileName } from "@/lib/use-file-name";
 import toast from "react-hot-toast";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
@@ -263,11 +266,14 @@ export default function TemplatesPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [generating, setGenerating] = useState(false);
   const [errors, setErrors] = useState<Record<string, boolean>>({});
+  // Output PDF name: random (date + time + code, no spaces) and renamable.
+  const docName = useFileName("docready-form", "pdf");
 
   const openTemplate = (t: Template) => {
     setActiveTemplate(t);
     setValues({});
     setErrors({});
+    docName.setName(randomFileStem(slugPrefix(t.id)));
   };
 
   const closeTemplate = () => {
@@ -296,9 +302,9 @@ export default function TemplatesPage() {
     setGenerating(true);
     try {
       const blob = await generatePDF(activeTemplate, values);
-      downloadBlob(blob, `${activeTemplate.id}-docready.pdf`);
+      downloadBlob(blob, docName.fileName);
       triggerConfetti();
-      toast.success("PDF generated and downloaded! 🎉");
+      toast.success(`PDF saved as ${docName.fileName} 🎉`);
     } catch (e) {
       toast.error("Failed to generate PDF. Please try again.");
     } finally {
@@ -430,6 +436,18 @@ export default function TemplatesPage() {
                     )}
                   </div>
                 ))}
+              </div>
+
+              {/* Output file name — random by default, renamable, never with spaces */}
+              <div className="mt-6 bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+                <FileNameField
+                  value={docName.stem}
+                  extension="pdf"
+                  onChange={docName.setName}
+                  onRandomize={docName.randomize}
+                  label="PDF file name / फ़ाइल का नाम"
+                  hint={`Saves as “${docName.fileName}” — date, time & a random code, no spaces.`}
+                />
               </div>
 
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
